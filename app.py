@@ -1,4 +1,4 @@
-# app.py
+# app.py — Polished UI/UX for CV Screening (Streamlit)
 import io, re, math, tempfile, time
 from typing import List, Dict
 import streamlit as st
@@ -18,28 +18,15 @@ st.set_page_config(
 # ------------------ Minimal theming via CSS ------------------
 STYLES = """
 <style>
-/* Layout tweaks */
-.block-container { padding-top: 1.2rem; padding-bottom: 2rem; }
+.block-container { padding-top: 1.1rem; padding-bottom: 2rem; }
 header[data-testid="stHeader"] { backdrop-filter: blur(6px); }
 
-/* Pills / chips */
-.chip { display:inline-block; padding:4px 10px; border-radius:999px;
-        margin:4px 6px 0 0; font-size:12px; background:#eef2ff; color:#3730a3; }
-
-/* Badges for ATS */
+.chip { display:inline-block; padding:4px 10px; border-radius:999px; margin:4px 6px 0 0; font-size:12px; background:#eef2ff; color:#3730a3; }
 .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; margin:0 6px 6px 0; }
 .badge.ok { background:#dcfce7; color:#166534; }
 .badge.warn { background:#fee2e2; color:#991b1b; }
-
-/* Keyword tags */
 .kw { display:inline-block; padding:3px 8px; border-radius:10px; margin:3px 6px 0 0; font-size:12px; background:#f1f5f9; color:#0f172a; }
 .kw.missing { background:#fff1f2; color:#9f1239; }
-
-/* Score highlight row hint (used in HTML table if needed) */
-.row-good { background: #ecfeff22; }
-
-/* Section titles */
-.h-subtle { color:#475569; font-size:0.95rem; margin-top:0.2rem; }
 .small { color:#64748b; font-size:0.85rem; }
 </style>
 """
@@ -183,25 +170,26 @@ with st.sidebar:
     use_phrases = st.checkbox("Simple phrase matching", value=True, help="2–3 word phrases from JD")
     strict_ats = st.checkbox("Strict ATS checks", value=False)
     topn_display = st.slider("Top N keywords (display)", 10, 50, 30, 5)
-    score_threshold = st.slider("Highlight score ≥ (%)", 0, 100, 70, 5)
-    sort_by = st.selectbox("Sort by", ["Score(%) desc", "ATS_OK desc", "Resume asc"])
+    score_threshold = st.slider("Shortlist score ≥ (%)", 0, 100, 70, 5)
+    sort_by = st.selectbox("Sort by", ["Score desc", "ATS desc", "Name asc"])
     st.divider()
     st.caption("Tip: For scanned PDFs, consider OCR. We can add it on request.")
 
-# ------------------ Main: Input area ------------------
+# ------------------ Main: Input ------------------
 c1, c2 = st.columns([1, 1])
 with c1:
     jd = st.text_area("Job Description", placeholder="Paste JD here…", height=220)
-    st.markdown("<div class='h-subtle'>Tip: Include must-have skills & years.</div>", unsafe_allow_html=True)
-
+    st.markdown("<div class='small'>Tip: Include must-have skills & years.</div>", unsafe_allow_html=True)
 with c2:
     files = st.file_uploader("Upload resumes (PDF/DOCX)", type=["pdf", "docx"], accept_multiple_files=True)
     if files:
-        st.markdown("**Files:** " + " ".join(
-            [f"<span class='chip'>{('📄 PDF' if f.name.lower().endswith('.pdf') else '📝 DOCX')} — {f.name}</span>" for f in files]
-        ), unsafe_allow_html=True)
+        st.markdown("**Files:** " + " ".join([
+            f"<span class='chip'>{('📄 PDF' if f.name.lower().endswith('.pdf') else '📝 DOCX')} — {f.name}</span>" for f in files
+        ]), unsafe_allow_html=True)
 
-run = st.button("🚀 Analyze", type="primary", use_container_width=True)
+run_col = st.container()
+with run_col:
+    run = st.button("🚀 Analyze", type="primary", use_container_width=True)
 
 # ------------------ Analyze ------------------
 if run:
@@ -212,7 +200,6 @@ if run:
         st.warning("Please upload at least one resume.")
         st.stop()
 
-    # Progress UI
     progress = st.progress(0, text="Parsing resumes…")
     texts = []
     for i, f in enumerate(files, start=1):
@@ -222,10 +209,8 @@ if run:
             t = ""
         texts.append({"file": f, "text": t})
         progress.progress(i / max(1, len(files)), text=f"Parsing: {f.name}")
-
     st.toast("Parsing complete ✅")
 
-    # Scoring
     with st.spinner("Scoring & extracting keywords…"):
         jd_tokens = tokenize(jd)
         doc_tokens = [tokenize(x["text"]) for x in texts]
@@ -238,93 +223,119 @@ if run:
             tokens = doc_tokens[i]
             vec = build_vector(term_freq(tokens), idf)
             score = cosine_sim(jd_vec, vec)
-            present, missing, phrase_present, phrase_missing = keyword_coverage(jd_tokens, tokens, use_phrases)
+            present, missing, phr_p, phr_m = keyword_coverage(jd_tokens, tokens, use_phrases)
             ats = ats_checks(x["text"], strict_ats)
+            ats_ok = sum(1 for c in ats if c['ok']); ats_total = len(ats)
+            ats_pct = round((ats_ok/ats_total)*100, 0) if ats_total else 0
             rows.append({
                 "Resume": x["file"].name,
-                "Score(%)": round(score * 100, 1),
-                "ATS_OK": f"{sum(1 for c in ats if c['ok'])}/{len(ats)}",
-                "MatchedKeywords": ", ".join((present + phrase_present)[:topn_display]),
-                "MissingKeywords": ", ".join((missing + phrase_missing)[:topn_display]),
+                "Score(%)": round(score*100, 1),
+                "ATS_OK": f"{ats_ok}/{ats_total}",
+                "ATS(%)": ats_pct,
+                "MatchedKeywords": ", ".join((present + phr_p)[:topn_display]),
+                "MissingKeywords": ", ".join((missing + phr_m)[:topn_display]),
                 "_ats": ats,
-                "_present": present,
-                "_missing": missing,
-                "_phr_present": phrase_present,
-                "_phr_missing": phrase_missing,
+                "_present": present, "_missing": missing,
+                "_phr_present": phr_p, "_phr_missing": phr_m,
             })
 
     # Sorting
-    if sort_by == "ATS_OK desc":
-        def ats_val(s):  # "5/6" -> 5/6
-            try:
-                a, b = s.split("/")
-                return float(a) / float(b)
-            except Exception:
-                return 0.0
-        rows.sort(key=lambda r: ats_val(r["ATS_OK"]), reverse=True)
-    elif sort_by == "Resume asc":
+    if sort_by == "ATS desc":
+        rows.sort(key=lambda r: r["ATS(%)"], reverse=True)
+    elif sort_by == "Name asc":
         rows.sort(key=lambda r: r["Resume"].lower())
     else:
         rows.sort(key=lambda r: r["Score(%)"], reverse=True)
 
-    # -------- Summary Cards --------
+    # Summary metrics
     scores = [r["Score(%)"] for r in rows]
     best = max(scores) if scores else 0.0
     avg = round(sum(scores)/len(scores), 1) if scores else 0.0
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Total Resumes", len(rows))
+    m2.metric("Best Score", f"{best}%")
+    m3.metric("Average Score", f"{avg}%")
 
-    mc1, mc2, mc3 = st.columns(3)
-    mc1.metric("Total Resumes", len(rows))
-    mc2.metric("Best Score", f"{best}%")
-    mc3.metric("Average Score", f"{avg}%")
+    # Tabs
+    tab_results, tab_insights, tab_ats = st.tabs(["📊 Results", "🔎 Insights", "✅ ATS Details"])
 
-    # -------- Aggregate missing keywords (top) --------
-    agg_missing = {}
-    for r in rows:
-        for kw in (r["_missing"] or []):
-            agg_missing[kw] = agg_missing.get(kw, 0) + 1
-    top_missing = sorted(agg_missing.items(), key=lambda x: x[1], reverse=True)[:15]
+    # --- Results Tab ---
+    with tab_results:
+        df = pd.DataFrame([{k: v for k, v in r.items() if not k.startswith("_")} for r in rows])
+        st.caption(f"Shortlist resumes with Score ≥ **{score_threshold}%**")
+        shortlist_mask = df["Score(%)"] >= score_threshold if not df.empty else pd.Series(dtype=bool)
 
-    if top_missing:
-        st.subheader("Top Missing Keywords (across resumes)")
-        st.markdown("".join([f"<span class='kw missing'>{w} • {c}</span>" for w, c in top_missing]), unsafe_allow_html=True)
-
-    # -------- Results Table --------
-    st.subheader("Results")
-    df = pd.DataFrame([{k: v for k, v in r.items() if not k.startswith("_")} for r in rows])
-
-    # Highlight filter
-    highlight_mask = df["Score(%)"] >= score_threshold if not df.empty else pd.Series(dtype=bool)
-    st.caption(f"Highlighting resumes with Score ≥ **{score_threshold}%**")
-
-    # Show highlighted chips summary
-    if not df.empty:
-        shortlisted = df[highlight_mask]
-        st.markdown("**Shortlisted:** " + " ".join(
-            [f"<span class='chip'>⭐ {n} ({s}%)</span>" for n, s in zip(shortlisted["Resume"], shortlisted["Score(%)"])]
-        ) if len(shortlisted) else "<span class='small'>No resumes above threshold.</span>",
-        unsafe_allow_html=True)
-
-    st.dataframe(df, use_container_width=True, height=380)
-
-    # Download
-    csv = df.to_csv(index=False).encode("utf-8")
-    st.download_button("⬇️ Download CSV", data=csv, file_name="cv-screening-results.csv", mime="text/csv", use_container_width=True)
-
-    # -------- ATS Details --------
-    with st.expander("ATS details per resume"):
-        for r in rows:
-            badges = " ".join(
-                [f"<span class='badge {'ok' if c['ok'] else 'warn'}'>{'✅' if c['ok'] else '❌'} {c['name']}</span>" for c in r["_ats"]]
+        # Show shortlisted chips
+        if not df.empty:
+            shortlisted = df[shortlist_mask]
+            st.markdown(
+                "**Shortlisted:** " + (" ".join([
+                    f"<span class='chip'>⭐ {n} ({s}%)</span>" for n, s in zip(shortlisted["Resume"], shortlisted["Score(%)"])
+                ]) if len(shortlisted) else "<span class='small'>No resumes above threshold.</span>"),
+                unsafe_allow_html=True
             )
-            st.markdown(f"**{r['Resume']}** — Score: **{r['Score(%)']}%** | ATS: **{r['ATS_OK']}**", unsafe_allow_html=True)
+
+        # Dataframe with progress bars
+        try:
+            st.dataframe(
+                df,
+                use_container_width=True,
+                column_config={
+                    "Score(%)": st.column_config.ProgressColumn("Score", help="Similarity to JD", format="%d%%", min_value=0, max_value=100),
+                    "ATS(%)": st.column_config.ProgressColumn("ATS", help="ATS checks passed", format="%d%%", min_value=0, max_value=100),
+                    "Resume": st.column_config.TextColumn("Resume", help="File name"),
+                    "ATS_OK": st.column_config.TextColumn("ATS OK", help="Checks passed/total"),
+                    "MatchedKeywords": st.column_config.TextColumn("Matched Keywords"),
+                    "MissingKeywords": st.column_config.TextColumn("Missing Keywords"),
+                },
+                hide_index=True,
+                height=420,
+            )
+        except Exception:
+            # Older Streamlit fallback
+            st.dataframe(df, use_container_width=True, height=420)
+
+        # Downloads
+        csv = df.to_csv(index=False).encode("utf-8")
+        st.download_button("⬇️ Download All Results (CSV)", data=csv, file_name="cv-screening-results.csv", mime="text/csv", use_container_width=True)
+
+        if not df.empty and shortlist_mask.any():
+            csv_short = df[shortlist_mask].to_csv(index=False).encode("utf-8")
+            st.download_button("⭐ Download Shortlist (CSV)", data=csv_short, file_name="cv-shortlist.csv", mime="text/csv", use_container_width=True)
+
+    # --- Insights Tab ---
+    with tab_insights:
+        # Aggregate top missing keywords
+        agg_missing = {}
+        for r in rows:
+            for kw in (r["_missing"] or []):
+                agg_missing[kw] = agg_missing.get(kw, 0) + 1
+        top_missing = sorted(agg_missing.items(), key=lambda x: x[1], reverse=True)[:20]
+
+        if top_missing:
+            st.subheader("Top Missing Keywords (across resumes)")
+            st.markdown("".join([f"<span class='kw missing'>{w} • {c}</span>" for w, c in top_missing]), unsafe_allow_html=True)
+            # Small chart
+            try:
+                chart_df = pd.DataFrame(top_missing, columns=["Keyword", "Count"]).set_index("Keyword")
+                st.bar_chart(chart_df)
+            except Exception:
+                pass
+        else:
+            st.info("No missing keywords found across resumes.")
+
+    # --- ATS Details Tab ---
+    with tab_ats:
+        for r in rows:
+            st.markdown(f"**{r['Resume']}** — Score: **{r['Score(%)']}%** | ATS: **{r['ATS_OK']}**")
+            badges = " ".join([
+                f"<span class='badge {'ok' if c['ok'] else 'warn'}'>{'✅' if c['ok'] else '❌'} {c['name']}</span>" for c in r["_ats"]
+            ])
             st.markdown(badges, unsafe_allow_html=True)
-            # Matched / Missing keywords chips
-            st.markdown("**Matched:** " + "".join([f"<span class='kw'>{w}</span>" for w in (r['_present'] + r['_phr_present'])[:20]]),
-                        unsafe_allow_html=True)
-            st.markdown("**Missing:** " + "".join([f"<span class='kw missing'>{w}</span>" for w in (r['_missing'] + r['_phr_missing'])[:20]]),
-                        unsafe_allow_html=True)
+            st.markdown("**Matched:** " + "".join([f"<span class='kw'>{w}</span>" for w in (r['_present'] + r['_phr_present'])[:20]]), unsafe_allow_html=True)
+            st.markdown("**Missing:** " + "".join([f"<span class='kw missing'>{w}</span>" for w in (r['_missing'] + r['_phr_missing'])[:20]]), unsafe_allow_html=True)
             st.divider()
 
 # Footer
 st.markdown("---")
-st.caption("© HR Mobineers • All processing on server-side (Streamlit). For OCR or embeddings-based matching, ask to enable advanced mode.")
+st.caption("© HR Mobineers • Streamlit app. Need Hindi UI or custom branding? Ping to enable.")
