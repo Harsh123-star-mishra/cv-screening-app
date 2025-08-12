@@ -1,11 +1,12 @@
-# app.py — Polished UI/UX for CV Screening (Streamlit)
-import io, re, math, tempfile, time
-from typing import List, Dict
+# app.py — Streamlit CV Screening with Requirement Fit + Vertical Charts
+import io, re, math, tempfile
+from typing import List, Dict, Tuple
 import streamlit as st
 import pandas as pd
 import numpy as np
 import pdfplumber
 import docx2txt
+import altair as alt
 
 # ------------------ Page config ------------------
 st.set_page_config(
@@ -31,14 +32,6 @@ header[data-testid="stHeader"] { backdrop-filter: blur(6px); }
 </style>
 """
 st.markdown(STYLES, unsafe_allow_html=True)
-
-# ------------------ Header ------------------
-left, right = st.columns([0.8, 0.2])
-with left:
-    st.markdown("### 📄 HR Mobineers – CV Screening")
-    st.caption("Upload multiple resumes (PDF/DOCX), paste JD, get similarity scores, keyword coverage & ATS checks.")
-with right:
-    st.markdown("<div class='small' style='text-align:right;'>Runs on Streamlit Cloud</div>", unsafe_allow_html=True)
 
 # ------------------ Utilities ------------------
 STOPWORDS = set([s.strip() for s in """
@@ -132,6 +125,7 @@ def ats_checks(text: str, strict: bool = False):
         checks.append({"name": "Experience mentioned", "ok": len(years) > 0})
     return checks
 
+# ------------------ Parsing ------------------
 def parse_pdf(uploaded_file) -> str:
     with pdfplumber.open(io.BytesIO(uploaded_file.getvalue())) as pdf:
         texts = []
@@ -164,6 +158,134 @@ def file_to_text(uploaded_file) -> str:
     else:
         raise ValueError(f"Unsupported file: {uploaded_file.name}")
 
+# ------------------ Requirement Fit (Preset: SQL Server DBA) ------------------
+REQ_PRESET = [
+    {"Requirement": "Total experience (12+ yrs)", "Type": "min_years", "Min": 12},
+    {"Requirement": "Core focus (DBA vs Dev)", "Type": "focus", "Expect": "DBA"},
+    {"Requirement": "Qualification (B.Tech/BSc/BCA/BE/MCA/M.Tech)", "Type": "degree", "AnyOf": ["B.Tech","BSc","BCA","BE","MCA","M.Tech"]},
+    {"Requirement": "Microsoft SQL Server", "Type": "versions"},
+    {"Requirement": "Backup maintenance", "Type": "presence_any", "Keywords": ["backup","restore","point-in-time","pitr","maintenance plan","recovery model"]},
+    {"Requirement": "Failover / HADR", "Type": "presence_any", "Keywords": ["always on","availability group","log shipping","cluster","mirroring","replication","failover","hadr"]},
+    {"Requirement": "Database logs (monitoring)", "Type": "presence_any", "Keywords": ["error log","health check","alerts","monitoring","spotlight","job monitoring"]},
+    {"Requirement": "Advanced operations (tuning/DMVs/security/automation)", "Type": "presence_any", "Keywords": ["dmv","dynamic management","execution plan","query store","performance tuning","sql agent","automation","powershell","security","roles","permissions","auditing"]},
+]
+
+DEGREE_PAT = re.compile(r"\b(b\.tech|btech|b\.sc|bsc|bca|be|mca|m\.tech|mtech)\b", re.I)
+VERSION_PAT = re.compile(r"sql\s*server\s*(2000|2005|2008|2012|2014|2016|2017|2019|2022)|\b(2000|2005|2008|2012|2014|2016|2017|2019|2022)\b", re.I)
+YEARS_PAT = re.compile(r"(\d{1,2})\+?\s*(years|yrs)", re.I)
+
+DBA_KWS = [
+    "always on","availability group","log shipping","clustering","cluster","mirroring","replication","backup","restore",
+    "maintenance plan","sql agent","agent jobs","index maintenance","rto","rpo","recovery","hadr","dba","deadlock","blocking",
+    "dmv","monitoring","alerts","error log","patching","failover","high availability","disaster recovery"
+]
+DEV_KWS = [
+    "t-sql","stored procedure","function","trigger","ssis","ssrs","ssas","etl","view","table","join","c#",".net","java",
+    "app developer","software developer","linq","entity framework","rest api","asp.net"
+]
+
+def find_keywords(text: str, kws: List[str]) -> List[str]:
+    low = text.lower()
+    found = []
+    for k in kws:
+        if k.lower() in low:
+            found.append(k)
+    return sorted(list(set(found)))
+
+
+def eval_min_years(text: str, min_years: int) -> Tuple[str,str]:
+    yrs = [int(m[0]) for m in YEARS_PAT.findall(text)]
+    if yrs:
+        mx = max(yrs)
+        return ("✅" if mx >= min_years else "❌", f"found {mx} yrs")
+    return ("❓", "years not found")
+
+
+def eval_focus(text: str, expect: str = "DBA") -> Tuple[str,str]:
+    dba_hits = len(find_keywords(text, DBA_KWS))
+    dev_hits = len(find_keywords(text, DEV_KWS))
+    if dba_hits==0 and dev_hits==0:
+        return ("❓", "no clear signals")
+    if expect.upper()=="DBA":
+        if dba_hits>=3 and dba_hits>=dev_hits:
+            return ("✅", f"DBA leaning (dba:{dba_hits}, dev:{dev_hits})")
+        elif dba_hits>0:
+            return ("⚠️", f"partial DBA (dba:{dba_hits}, dev:{dev_hits})")
+        else:
+            return ("❌", f"dev leaning (dba:{dba_hits}, dev:{dev_hits})")
+    else:
+        if dev_hits>=3 and dev_hits>=dba_hits:
+            return ("✅", f"Dev leaning (dev:{dev_hits}, dba:{dba_hits})")
+        elif dev_hits>0:
+            return ("⚠️", f"partial Dev (dev:{dev_hits}, dba:{dba_hits})")
+        else:
+            return ("❌", f"dba leaning (dev:{dev_hits}, dba:{dba_hits})")
+
+
+def eval_degree(text: str, any_of: List[str]) -> Tuple[str,str]:
+    hits = DEGREE_PAT.findall(text)
+    if hits:
+        canon = set()
+        for h in hits:
+            h2 = h.lower().replace('.', '')
+            if 'btech' in h2: canon.add('B.Tech')
+            elif 'bsc' in h2: canon.add('BSc')
+            elif 'bca' in h2: canon.add('BCA')
+            elif h2=='be': canon.add('BE')
+            elif 'mtech' in h2: canon.add('M.Tech')
+            elif 'mca' in h2: canon.add('MCA')
+        ok = any(d in canon for d in any_of)
+        return ("✅" if ok else "⚠️", ", ".join(sorted(canon)) or "degree detected")
+    return ("❓", "degree not found")
+
+
+def eval_versions(text: str) -> Tuple[str,str]:
+    hits = [m[0] or m[1] for m in VERSION_PAT.findall(text)]
+    hits = [h for h in hits if h]
+    if hits:
+        return ("✅", ", ".join(sorted(set(hits))))
+    if 'sql server' in text.lower():
+        return ("⚠️", "SQL Server mentioned, versions not clear")
+    return ("❌", "not found")
+
+
+def eval_presence_any(text: str, keywords: List[str]) -> Tuple[str,str]:
+    hits = find_keywords(text, keywords)
+    if hits:
+        if len(hits)==1 and hits[0] in ["backup","restore","monitoring"]:
+            return ("⚠️", ", ".join(hits))
+        return ("✅", ", ".join(hits))
+    return ("❌", "not found")
+
+EVAL_MAP = {
+    'min_years': lambda t, cfg: eval_min_years(t, cfg.get('Min', 0)),
+    'focus': lambda t, cfg: eval_focus(t, cfg.get('Expect','DBA')),
+    'degree': lambda t, cfg: eval_degree(t, cfg.get('AnyOf', [])),
+    'versions': lambda t, cfg: eval_versions(t),
+    'presence_any': lambda t, cfg: eval_presence_any(t, cfg.get('Keywords', [])),
+}
+
+
+def build_requirement_fit(resume_texts: Dict[str,str], preset=REQ_PRESET) -> pd.DataFrame:
+    req_rows = []
+    for req in preset:
+        row = { 'Requirement': req['Requirement'] }
+        rtype = req['Type']
+        for cand, text in resume_texts.items():
+            status, evidence = EVAL_MAP[rtype](text, req)
+            row[cand] = f"{status} {evidence}"
+        req_rows.append(row)
+    df = pd.DataFrame(req_rows)
+    return df
+
+# ------------------ Header ------------------
+left, right = st.columns([0.8, 0.2])
+with left:
+    st.markdown("### 📄 HR Mobineers – CV Screening")
+    st.caption("Upload multiple resumes (PDF/DOCX), paste JD, get similarity scores, keyword coverage, ATS checks, Requirement Fit, and vertical charts.")
+with right:
+    st.markdown("<div class='small' style='text-align:right;'>Runs on Streamlit Cloud</div>", unsafe_allow_html=True)
+
 # ------------------ Sidebar (sticky) ------------------
 with st.sidebar:
     st.header("⚙️ Settings")
@@ -178,8 +300,7 @@ with st.sidebar:
 # ------------------ Main: Input ------------------
 c1, c2 = st.columns([1, 1])
 with c1:
-    jd = st.text_area("Job Description", placeholder="Paste JD here…", height=220)
-    st.markdown("<div class='small'>Tip: Include must-have skills & years.</div>", unsafe_allow_html=True)
+    jd = st.text_area("Job Description", placeholder="Paste JD here…", height=200)
 with c2:
     files = st.file_uploader("Upload resumes (PDF/DOCX)", type=["pdf", "docx"], accept_multiple_files=True)
     if files:
@@ -187,9 +308,7 @@ with c2:
             f"<span class='chip'>{('📄 PDF' if f.name.lower().endswith('.pdf') else '📝 DOCX')} — {f.name}</span>" for f in files
         ]), unsafe_allow_html=True)
 
-run_col = st.container()
-with run_col:
-    run = st.button("🚀 Analyze", type="primary", use_container_width=True)
+run = st.button("🚀 Analyze", type="primary", use_container_width=True)
 
 # ------------------ Analyze ------------------
 if run:
@@ -200,6 +319,7 @@ if run:
         st.warning("Please upload at least one resume.")
         st.stop()
 
+    # Parse resumes
     progress = st.progress(0, text="Parsing resumes…")
     texts = []
     for i, f in enumerate(files, start=1):
@@ -211,6 +331,7 @@ if run:
         progress.progress(i / max(1, len(files)), text=f"Parsing: {f.name}")
     st.toast("Parsing complete ✅")
 
+    # Tokenize & score
     with st.spinner("Scoring & extracting keywords…"):
         jd_tokens = tokenize(jd)
         doc_tokens = [tokenize(x["text"]) for x in texts]
@@ -237,6 +358,7 @@ if run:
                 "_ats": ats,
                 "_present": present, "_missing": missing,
                 "_phr_present": phr_p, "_phr_missing": phr_m,
+                "_raw_text": x["text"],
             })
 
     # Sorting
@@ -257,7 +379,7 @@ if run:
     m3.metric("Average Score", f"{avg}%")
 
     # Tabs
-    tab_results, tab_insights, tab_ats = st.tabs(["📊 Results", "🔎 Insights", "✅ ATS Details"])
+    tab_results, tab_insights, tab_fit, tab_ats = st.tabs(["📊 Results", "📈 Charts", "📑 Requirement Fit", "✅ ATS Details"])
 
     # --- Results Tab ---
     with tab_results:
@@ -265,7 +387,6 @@ if run:
         st.caption(f"Shortlist resumes with Score ≥ **{score_threshold}%**")
         shortlist_mask = df["Score(%)"] >= score_threshold if not df.empty else pd.Series(dtype=bool)
 
-        # Show shortlisted chips
         if not df.empty:
             shortlisted = df[shortlist_mask]
             st.markdown(
@@ -275,7 +396,6 @@ if run:
                 unsafe_allow_html=True
             )
 
-        # Dataframe with progress bars
         try:
             st.dataframe(
                 df,
@@ -283,46 +403,81 @@ if run:
                 column_config={
                     "Score(%)": st.column_config.ProgressColumn("Score", help="Similarity to JD", format="%d%%", min_value=0, max_value=100),
                     "ATS(%)": st.column_config.ProgressColumn("ATS", help="ATS checks passed", format="%d%%", min_value=0, max_value=100),
-                    "Resume": st.column_config.TextColumn("Resume", help="File name"),
-                    "ATS_OK": st.column_config.TextColumn("ATS OK", help="Checks passed/total"),
-                    "MatchedKeywords": st.column_config.TextColumn("Matched Keywords"),
-                    "MissingKeywords": st.column_config.TextColumn("Missing Keywords"),
                 },
                 hide_index=True,
                 height=420,
             )
         except Exception:
-            # Older Streamlit fallback
             st.dataframe(df, use_container_width=True, height=420)
 
-        # Downloads
         csv = df.to_csv(index=False).encode("utf-8")
         st.download_button("⬇️ Download All Results (CSV)", data=csv, file_name="cv-screening-results.csv", mime="text/csv", use_container_width=True)
-
         if not df.empty and shortlist_mask.any():
             csv_short = df[shortlist_mask].to_csv(index=False).encode("utf-8")
             st.download_button("⭐ Download Shortlist (CSV)", data=csv_short, file_name="cv-shortlist.csv", mime="text/csv", use_container_width=True)
 
-    # --- Insights Tab ---
+    # --- Charts Tab (Vertical charts) ---
     with tab_insights:
-        # Aggregate top missing keywords
+        st.subheader("Vertical Charts")
+        if rows:
+            chart_df = pd.DataFrame(rows)
+            # Clean/shorten names for axis
+            chart_df['Name'] = chart_df['Resume'].apply(lambda s: s.rsplit('.',1)[0])
+            # Score chart
+            st.markdown("**Scores by Resume**")
+            score_chart = alt.Chart(chart_df).mark_bar(color="#0ea5e9").encode(
+                x=alt.X('Name:N', sort='-y', title='Resume'),
+                y=alt.Y('Score(%) :Q', title='Score (%)')
+            ).properties(height=320)
+            score_text = score_chart.mark_text(align='center', dy=-6, color='#0f172a').encode(text='Score(%) :Q')
+            st.altair_chart(score_chart + score_text, use_container_width=True)
+
+            # ATS chart
+            st.markdown("**ATS % by Resume**")
+            ats_chart = alt.Chart(chart_df).mark_bar(color="#22c55e").encode(
+                x=alt.X('Name:N', sort='-y', title='Resume'),
+                y=alt.Y('ATS(%) :Q', title='ATS (%)')
+            ).properties(height=320)
+            ats_text = ats_chart.mark_text(align='center', dy=-6, color='#14532d').encode(text='ATS(%) :Q')
+            st.altair_chart(ats_chart + ats_text, use_container_width=True)
+
+            # Matched keyword count chart
+            chart_df['MatchedCount'] = chart_df.apply(lambda r: len(r.get('_present', [])) + len(r.get('_phr_present', [])), axis=1)
+            st.markdown("**Matched Keywords (count) by Resume**")
+            kw_chart = alt.Chart(chart_df).mark_bar(color="#6366f1").encode(
+                x=alt.X('Name:N', sort='-y', title='Resume'),
+                y=alt.Y('MatchedCount:Q', title='Matched keywords (count)')
+            ).properties(height=320)
+            kw_text = kw_chart.mark_text(align='center', dy=-6, color='#312e81').encode(text='MatchedCount:Q')
+            st.altair_chart(kw_chart + kw_text, use_container_width=True)
+        else:
+            st.info("Run analysis to see charts.")
+
+        # Top missing keywords (aggregate)
         agg_missing = {}
         for r in rows:
-            for kw in (r["_missing"] or []):
+            for kw in (r.get('_missing') or []):
                 agg_missing[kw] = agg_missing.get(kw, 0) + 1
         top_missing = sorted(agg_missing.items(), key=lambda x: x[1], reverse=True)[:20]
-
         if top_missing:
-            st.subheader("Top Missing Keywords (across resumes)")
-            st.markdown("".join([f"<span class='kw missing'>{w} • {c}</span>" for w, c in top_missing]), unsafe_allow_html=True)
-            # Small chart
-            try:
-                chart_df = pd.DataFrame(top_missing, columns=["Keyword", "Count"]).set_index("Keyword")
-                st.bar_chart(chart_df)
-            except Exception:
-                pass
-        else:
-            st.info("No missing keywords found across resumes.")
+            st.markdown("**Top Missing Keywords (across resumes)**")
+            miss_df = pd.DataFrame(top_missing, columns=['Keyword','Count'])
+            miss_chart = alt.Chart(miss_df).mark_bar(color="#f97316").encode(
+                x=alt.X('Keyword:N', sort='-y', title='Keyword'),
+                y=alt.Y('Count:Q', title='Count across resumes')
+            ).properties(height=320)
+            st.altair_chart(miss_chart, use_container_width=True)
+
+    # --- Requirement Fit Tab ---
+    with tab_fit:
+        st.caption("Evidence-based requirement-by-requirement matrix (auto-evaluated from resumes).")
+        resume_texts = { r["Resume"].rsplit('.',1)[0]: r["_raw_text"] for r in rows }
+        req_df = build_requirement_fit(resume_texts, REQ_PRESET)
+        st.dataframe(req_df, use_container_width=True, height=400)
+        csv = req_df.to_csv(index=False).encode('utf-8')
+        st.download_button("⬇️ Download Requirement Fit (CSV)", data=csv, file_name="requirement-fit.csv", mime="text/csv", use_container_width=True)
+        html = req_df.to_html(index=False)
+        st.download_button("⬇️ Download Requirement Fit (HTML)", data=html, file_name="requirement-fit.html", mime="text/html", use_container_width=True)
 
     # --- ATS Details Tab ---
     with tab_ats:
@@ -338,4 +493,4 @@ if run:
 
 # Footer
 st.markdown("---")
-st.caption("© HR Mobineers • Streamlit app. Need Hindi UI or custom branding? Ping to enable.")
+st.caption("© HR Mobineers • Streamlit app with vertical charts & requirement fit. Need Hindi UI or role presets? Ping to enable.")

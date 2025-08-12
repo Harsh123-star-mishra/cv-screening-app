@@ -3,3 +3,4 @@ pandas>=2.0
 numpy>=1.24
 pdfplumber>=0.11
 docx2txt>=0.8
+altair>=5.0
