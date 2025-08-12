@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CV Screening App (No Python)</title>
+  <link rel="stylesheet" href="assets/style.css" />
+  <!-- PDF.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script>
+    // Configure PDF.js worker
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  </script>
+  <!-- mammoth.js for .docx parsing -->
+  <script src="https://unpkg.com/mammoth/mammoth.browser.min.js"></script>
+</head>
+<body>
+  <header>
+    <h1>CV Screening App</h1>
+    <p>Upload multiple resumes (PDF/DOCX) + paste Job Description. All in your browser. No server, no Python.</p>
+  </header>
+
+  <main>
+    <section class="panel">
+      <h2>1) Job Description</h2>
+      <textarea id="jdText" placeholder="Paste job description here..."></textarea>
+      <div class="row">
+        <label><input type="checkbox" id="usePhrases" checked> Try phrase matching (simple)</label>
+        <label><input type="checkbox" id="strictATS"> Strict ATS checks</label>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>2) Upload Resumes</h2>
+      <div id="dropZone" class="drop-zone">
+        <p>Drag & drop resumes here or <label for="fileInput" class="link-like">browse</label></p>
+        <input id="fileInput" type="file" accept=".pdf,.docx" multiple hidden />
+      </div>
+      <div id="fileList" class="file-list"></div>
+      <div class="row">
+        <button id="analyzeBtn" class="primary">Analyze</button>
+        <button id="downloadCsvBtn" class="secondary" disabled>Download CSV</button>
+        <span id="status" class="status"></span>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>3) Results</h2>
+      <div id="results"></div>
+    </section>
+  </main>
+
+  <footer>
+    <p>Runs fully client-side. Keep sensitive data safe. Built with <a href="https://mozilla.github.io/pdf.js/" target="_blank">PDF.js</a> and <a href="https://github.com/mwilliamson/mammoth.js" target="_blank">mammoth.js</a>.</p>
+  </footer>
+
+  <script src="assets/app.js"></script>
+</body>
+</html>
