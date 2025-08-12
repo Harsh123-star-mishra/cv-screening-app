@@ -1,24 +1,30 @@
-# CV Screening App (Browser-only)
+# CV Screening App (Streamlit)
 
-A lightweight, privacy-friendly CV/resume screening tool that runs 100% in the browser. No Python, no server.
+A privacy-friendly resume screening tool. Upload PDFs/DOCX + paste Job Description, get similarity scores, keyword coverage, and ATS checks.
+
+## Deploy on Streamlit Community Cloud
+1. Create a new **public GitHub repo** (e.g., `streamlit-cv-screening-app`).
+2. Add these files at repo root:
+   - `app.py`
+   - `requirements.txt`
+   - (optional) `README.md`
+3. Go to **https://share.streamlit.io** and connect your GitHub account.
+4. Select your repo, set **Main file path** = `app.py`, and **Deploy**.
+5. After build completes, your app will be live at `https://<your-username>-<repo-name>-<branch>.streamlit.app/`.
+
+## Local run (optional)
+```bash
+pip install -r requirements.txt
+streamlit run app.py
+```
 
 ## Features
-- Parse **PDF** and **DOCX** resumes client-side (PDF.js + mammoth.js)
-- Paste **Job Description** and get similarity score (cosine TF-IDF)
-- Highlight matched/missing keywords; optional simple phrase matching
-- Basic **ATS checks** (email, phone, LinkedIn, sections)
-- Export results to **CSV**
-- Host with **GitHub Pages** in minutes
-
-## How to run locally
-Just open `index.html` in a modern browser (Chrome/Edge/Firefox). To avoid CORS, prefer a local server or GitHub Pages hosting.
-
-## Deploy to GitHub Pages
-1. Create a new GitHub repo (e.g., `cv-screening-app`).
-2. Upload the contents of this folder (`index.html`, `assets/`).
-3. In **Settings → Pages**, set **Branch** to `main` (root) and save.
-4. Wait 1–2 minutes; your site will be live at `https://<your-username>.github.io/cv-screening-app/`.
+- Parse **PDF** (pdfplumber) and **DOCX** (docx2txt)
+- **TF‑IDF cosine similarity** between JD & each resume (custom implementation)
+- **Keyword coverage** (matched/missing; simple phrase detection)
+- **ATS checks**: email, phone, LinkedIn, GitHub, sections, bullets
+- **Export CSV**
 
 ## Notes
-- All processing happens client-side. Large or scanned PDFs may reduce accuracy.
-- This is a heuristic tool; tweak stopwords/logic in `assets/app.js` as needed.
+- Scanned PDFs (images) won't extract text (no OCR).
+- Adjust stopwords/thresholds in `app.py` per role/domain.
